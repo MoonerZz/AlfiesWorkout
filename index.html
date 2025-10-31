@@ -43,6 +43,37 @@
         input[type=number] {
           -moz-appearance: textfield;
         }
+        
+        /* Styles for the quote ticker */
+        .quote-box {
+            height: 4rem; /* h-16 */
+            position: relative;
+            overflow: hidden;
+            border-radius: 1rem; /* rounded-2xl */
+            background-color: #1e293b; /* bg-slate-800 */
+        }
+        .quote-ticker-tape {
+            /* 30 quotes, each h-16 (4rem) = 120rem. Duplicated = 240rem */
+            height: 240rem; 
+            /* 30 quotes * 3s per quote = 90s animation */
+            animation: scroll-quotes 90s linear infinite;
+        }
+        .quote-item {
+            height: 4rem; /* h-16 */
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding-left: 1.25rem; /* px-5 */
+            padding-right: 1.25rem; /* px-5 */
+            text-align: center;
+            font-style: italic;
+            color: #94a3b8; /* text-gray-400 */
+        }
+        @keyframes scroll-quotes {
+            0% { transform: translateY(0); }
+            /* Animate to the height of the *original* list */
+            100% { transform: translateY(-120rem); } 
+        }
     </style>
 </head>
 <body class="flex flex-col h-full font-sans bg-slate-900 text-gray-200">
@@ -122,13 +153,39 @@
             }
         }
 
-        function saveToLocalStorage(key, value) {
-            try {
-                window.localStorage.setItem(key, JSON.stringify(value));
-            } catch (error) {
-                console.error('Error writing to localStorage', error);
-            }
-        }
+        // --- QUOTES DATA ---
+        const gymQuotes = [
+            "The only bad workout is the one that didn't happen.",
+            "Strive for progress, not perfection.",
+            "Your body can stand almost anything. It's your mind you have to convince.",
+            "Success starts with self-discipline.",
+            "The hard part isn't getting your body in shape. The hard part is getting your mind in shape.",
+            "Train insane or remain the same.",
+            "Push yourself, because no one else is going to do it for you.",
+            "Sweat is just fat crying.",
+            "Don't limit your challenges. Challenge your limits.",
+            "The pain you feel today will be the strength you feel tomorrow.",
+            "Get after it, Alfie!",
+            "It's a slow process, but quitting won't speed it up.",
+            "Discipline is just choosing between what you want now and what you want most.",
+            "You don't have to be great to start, but you have to start to be great.",
+            "Light weight, baby!",
+            "One more rep!",
+            "The clock is ticking. You're getting stronger.",
+            "Hustle for that muscle.",
+            "Be stronger than your excuses.",
+            "No pain, no gain.",
+            "When you feel like quitting, think about why you started.",
+            "Doubt me. Make me. Watch me.",
+            "The only person you are destined to become is the person you decide to be.",
+            "Go the extra mile. It's never crowded.",
+            "This is what you came for.",
+            "Obsessed is a word the lazy use to describe the dedicated.",
+            "Form over weight. Always.",
+            "Rest day? Nah, it's an active recovery day.",
+            "Stay humble, stay hungry.",
+            "Get it done. No excuses."
+        ];
 
         // --- WORKOUT PROGRAM DATA (Initial Seed) ---
         const PROGRAM_WEEKS = 12;
@@ -657,6 +714,15 @@
                         <h1 class="text-3xl font-bold text-white">Hi Alfie!</h1>
                         <p class="text-lg text-gray-400">Ready to crush your next session?</p>
                     </header>
+
+                    <!-- Scrolling Quotes -->
+                    <div class="quote-box">
+                        <div class="quote-ticker-tape">
+                            ${[...gymQuotes, ...gymQuotes].map(quote => `
+                                <div class="quote-item">${quote}</div>
+                            `).join('')}
+                        </div>
+                    </div>
 
                     ${workoutCardHtml}
 
@@ -1226,5 +1292,6 @@
     </script>
 </body>
 </html>
+
 
 
