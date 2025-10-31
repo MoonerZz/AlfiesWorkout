@@ -63,6 +63,11 @@
         <!-- Countdown will be injected here -->
     </div>
 
+    <!-- Confirmation Modal (Container) -->
+    <div id="modal-container" class="hidden">
+        <!-- Modal will be injected here by JavaScript -->
+    </div>
+
     <!-- Bottom Navigation -->
     <nav class="fixed bottom-0 left-0 right-0 bg-slate-800 border-t border-slate-700 shadow-lg z-30">
         <div class="flex justify-around max-w-md mx-auto" id="bottom-nav-bar">
@@ -90,6 +95,13 @@
                 timerId: null,
                 showCountdown: null,
             },
+
+            // Modal state
+            modal: {
+                isOpen: false,
+                message: '',
+                onConfirm: null,
+            },
         };
 
         // --- DOM SELECTORS ---
@@ -97,6 +109,7 @@
         const navBarContainer = document.getElementById('bottom-nav-bar');
         const timerContainer = document.getElementById('floating-timer-container');
         const countdownContainer = document.getElementById('countdown-overlay-container');
+        const modalContainer = document.getElementById('modal-container');
 
         // --- LOCAL STORAGE UTILITIES ---
         function getFromLocalStorage(key, initialValue) {
@@ -304,6 +317,17 @@
                 appState.page = 'home';
                 renderApp();
             },
+            cancelWorkout: () => {
+                window.handlers.showConfirmModal(
+                    "Are you sure you want to cancel? This workout session will not be saved.",
+                    () => {
+                        appState.activeWorkout = null;
+                        appState.workoutLog = {};
+                        appState.page = 'home';
+                        renderApp(); // This will re-render the home page
+                    }
+                );
+            },
             addSet: (exerciseName) => {
                 const newSet = { reps: 0, weight: 0 };
                 const sets = appState.workoutLog[exerciseName] || [];
@@ -336,8 +360,11 @@
                 const card = document.getElementById(cardId);
                 if (!card) return; // Should not happen
 
+                // Re-read current sets *after* updating state
+                const currentSets = appState.workoutLog[exerciseName] || [];
+
                 // 1. Update 1RM
-                const session1RM = sets.reduce((max, set) => {
+                const session1RM = currentSets.reduce((max, set) => {
                     const current1RM = calculate1RM(set.weight, set.reps);
                     return current1RM > max ? current1RM : max;
                 }, 0);
@@ -358,7 +385,7 @@
                 if (exerciseDef) {
                     const targetSets = exerciseDef.targetSets;
                     // Filter out empty sets for completion check
-                    const completedSets = sets.filter(s => s.weight > 0 || s.reps > 0).length;
+                    const completedSets = currentSets.filter(s => s.weight > 0 || s.reps > 0).length;
                     const isComplete = completedSets >= targetSets && targetSets > 0;
                     
                     if (isComplete) {
@@ -477,7 +504,20 @@
                     }
                 }, 1000);
                 appState.timer.timerId = id;
-            }
+            },
+            // Modal Handlers
+            showConfirmModal: (message, onConfirm) => {
+                appState.modal.isOpen = true;
+                appState.modal.message = message;
+                appState.modal.onConfirm = onConfirm;
+                renderModal();
+            },
+            hideConfirmModal: () => {
+                appState.modal.isOpen = false;
+                appState.modal.message = '';
+                appState.modal.onConfirm = null;
+                renderModal();
+            },
         };
 
         // --- RENDER FUNCTIONS ---
@@ -516,6 +556,9 @@
             // Render countdown overlay (it will be hidden if state is null)
             renderCountdownOverlay();
 
+            // Render modal (it will be hidden if state is null)
+            renderModal();
+
             // IMPORTANT: Tell Lucide to find all <i data-lucide="..."> tags and replace them
             lucide.createIcons();
         }
@@ -548,28 +591,42 @@
         // --- Page Render Functions ---
 
         function renderHomePage() {
-            const { nextWeek, nextWorkoutData } = getNextWorkout();
             const { totalKg, totalReps, totalSets } = getFunMetrics();
             const totalWorkouts = appState.history.length;
 
-            const exercisesPreview = nextWorkoutData.exercises.slice(0, 3).map(ex => `
-                <p key="${ex.name}" class="text-gray-400">
-                    - ${ex.name} (${ex.targetReps})
-                </p>
-            `).join('');
-
-            const exercisesMore = nextWorkoutData.exercises.length > 3 ?
-                `<p class="text-gray-500">+ ${nextWorkoutData.exercises.length - 3} more...</p>` : '';
-            
-            // This is messy, but it's how we build UI without React
-            // We use data-* attributes to store state for event listeners
-            appContainer.innerHTML = `
-                <div class="p-6 space-y-6">
-                    <header class="space-y-2">
-                        <h1 class="text-3xl font-bold text-white">Hi Alfie!</h1>
-                        <p class="text-lg text-gray-400">Ready to crush your next session?</p>
-                    </header>
-
+            let workoutCardHtml = '';
+            if (appState.activeWorkout) {
+                // Render Resume Card
+                const workout = appState.activeWorkout;
+                const exercisesPreview = workout.exercises.slice(0, 3).map(ex => `<p key="${ex.name}" class="text-gray-400">- ${ex.name} (${ex.targetReps})</p>`).join('');
+                const exercisesMore = workout.exercises.length > 3 ? `<p class="text-gray-500">+ ${workout.exercises.length - 3} more...</p>` : '';
+                workoutCardHtml = `
+                    <!-- Resume Workout Card -->
+                    <div class="bg-slate-800 p-5 rounded-2xl shadow-lg space-y-4 border-2 border-blue-500">
+                        <div class="flex justify-between items-center">
+                            <div>
+                                <p class="text-sm font-semibold text-blue-400">IN PROGRESS</p>
+                                <h2 class="text-2xl font-bold text-white">Week ${workout.week}, ${workout.splitName}</h2>
+                            </div>
+                            <button
+                                onclick="window.handlers.setPage('workout')"
+                                class="bg-blue-500 hover:bg-blue-600 text-white rounded-full p-4 transition-transform active:scale-95"
+                            >
+                                <i data-lucide="play" class="fill-white"></i>
+                            </button>
+                        </div>
+                        <div class="space-y-2">
+                            ${exercisesPreview}
+                            ${exercisesMore}
+                        </div>
+                    </div>
+                `;
+            } else {
+                // Render Next Workout Card
+                const { nextWeek, nextWorkoutData } = getNextWorkout();
+                const exercisesPreview = nextWorkoutData.exercises.slice(0, 3).map(ex => `<p key="${ex.name}" class="text-gray-400">- ${ex.name} (${ex.targetReps})</p>`).join('');
+                const exercisesMore = nextWorkoutData.exercises.length > 3 ? `<p class="text-gray-500">+ ${nextWorkoutData.exercises.length - 3} more...</p>` : '';
+                workoutCardHtml = `
                     <!-- Next Workout Card -->
                     <div class="bg-slate-800 p-5 rounded-2xl shadow-lg space-y-4">
                         <div class="flex justify-between items-center">
@@ -589,10 +646,23 @@
                             ${exercisesMore}
                         </div>
                     </div>
+                `;
+            }
+
+            // This is messy, but it's how we build UI without React
+            // We use data-* attributes to store state for event listeners
+            appContainer.innerHTML = `
+                <div class="p-6 space-y-6">
+                    <header class="space-y-2">
+                        <h1 class="text-3xl font-bold text-white">Hi Alfie!</h1>
+                        <p class="text-lg text-gray-400">Ready to crush your next session?</p>
+                    </header>
+
+                    ${workoutCardHtml}
 
                     <!-- Workout Picker -->
-                    <div class="bg-slate-800 p-5 rounded-2xl shadow-lg space-y-4">
-                        <button id="picker-toggle" class="w-full flex justify-between items-center">
+                    <div class="bg-slate-800 p-5 rounded-2xl shadow-lg space-y-4 ${appState.activeWorkout ? 'opacity-50' : ''}">
+                        <button id="picker-toggle" class="w-full flex justify-between items-center" ${appState.activeWorkout ? 'disabled' : ''}>
                             <h2 class="text-xl font-bold text-white">Or, select a workout</h2>
                             <i data-lucide="chevron-right" id="picker-icon"></i>
                         </button>
@@ -600,7 +670,7 @@
                             <div>
                                 <label for="week-select" class="block text-sm font-medium text-gray-400 mb-1">Select Week</label>
                                 <select id="week-select" class="w-full bg-slate-700 text-white p-2 rounded-lg">
-                                    ${appState.program.map(w => `<option value="${w.week}" ${w.week === nextWeek ? 'selected' : ''}>Week ${w.week}</option>`).join('')}
+                                    ${appState.program.map(w => `<option value="${w.week}" ${w.week === getNextWorkout().nextWeek ? 'selected' : ''}>Week ${w.week}</option>`).join('')}
                                 </select>
                             </div>
                             <div id="day-picker-list" class="space-y-2">
@@ -638,6 +708,7 @@
             let showPicker = false;
             
             pickerToggle.onclick = () => {
+                if (appState.activeWorkout) return; // Guard clause
                 showPicker = !showPicker;
                 pickerContent.classList.toggle('hidden');
                 pickerIcon.outerHTML = showPicker ? '<i data-lucide="chevron-down"></i>' : '<i data-lucide="chevron-right"></i>';
@@ -886,8 +957,15 @@
                     
                     <div class="flex gap-4">
                         <button
+                            onclick="window.handlers.cancelWorkout()"
+                            class="w-1/2 flex items-center justify-center gap-2 bg-slate-600 hover:bg-slate-700 text-white font-bold py-3 px-4 rounded-xl transition-transform active:scale-95"
+                        >
+                            <i data-lucide="x" class="w-5 h-5"></i>
+                            Cancel
+                        </button>
+                        <button
                             onclick="window.handlers.finishWorkout()"
-                            class="w-full flex items-center justify-center gap-2 bg-blue-500 hover:bg-blue-600 text-white font-bold py-3 px-4 rounded-xl transition-transform active:scale-95"
+                            class="w-1/2 flex items-center justify-center gap-2 bg-blue-500 hover:bg-blue-600 text-white font-bold py-3 px-4 rounded-xl transition-transform active:scale-95"
                         >
                             <i data-lucide="check" class="w-5 h-5"></i>
                             Finish
@@ -1046,22 +1124,22 @@
             };
             
             timerContainer.innerHTML = `
-                <div class="fixed bottom-24 right-6 bg-slate-800 p-6 rounded-2xl shadow-2xl w-80 text-center space-y-4 z-40">
+                <div class="fixed bottom-24 right-6 bg-white border border-slate-900 p-6 rounded-2xl shadow-2xl w-80 text-center space-y-4 z-40">
                     <div class="flex justify-between items-center">
-                        <h2 class="text-xl font-bold text-white">Rest Timer</h2>
-                        <button onclick="window.handlers.minimizeTimer()" class="text-gray-500 hover:text-white" aria-label="Minimize Timer">
+                        <h2 class="text-xl font-bold text-slate-900">Rest Timer</h2>
+                        <button onclick="window.handlers.minimizeTimer()" class="text-gray-500 hover:text-black" aria-label="Minimize Timer">
                             <i data-lucide="chevron-down" class="w-6 h-6"></i>
                         </button>
                     </div>
                     
-                    <div class="text-7xl font-bold text-blue-400 my-4">
+                    <div class="text-7xl font-bold text-blue-600 my-4">
                         ${formatTime()}
                     </div>
                     
                     <div class="grid grid-cols-3 gap-2">
-                        <button onclick="window.handlers.resetTimer(60)" class="bg-slate-700 text-white p-2 rounded-lg">60s</button>
-                        <button onclick="window.handlers.resetTimer(90)" class="bg-slate-700 text-white p-2 rounded-lg">90s</button>
-                        <button onclick="window.handlers.resetTimer(120)" class="bg-slate-700 text-white p-2 rounded-lg">120s</button>
+                        <button onclick="window.handlers.resetTimer(60)" class="bg-gray-200 text-slate-800 p-2 rounded-lg">60s</button>
+                        <button onclick="window.handlers.resetTimer(90)" class="bg-gray-200 text-slate-800 p-2 rounded-lg">90s</button>
+                        <button onclick="window.handlers.resetTimer(120)" class="bg-gray-200 text-slate-800 p-2 rounded-lg">120s</button>
                     </div>
                     
                     ${isRunning ? `
@@ -1099,6 +1177,38 @@
             }
         }
 
+        function renderModal() {
+            if (!appState.modal.isOpen) {
+                modalContainer.innerHTML = '';
+                modalContainer.classList.add('hidden');
+                return;
+            }
+            modalContainer.classList.remove('hidden');
+            modalContainer.innerHTML = `
+                <div class="fixed inset-0 bg-black bg-opacity-70 z-40 flex items-center justify-center p-6">
+                    <div class="bg-slate-800 p-6 rounded-2xl shadow-lg max-w-sm w-full space-y-4">
+                        <h3 class="text-xl font-bold text-white">Are you sure?</h3>
+                        <p class="text-gray-300">${appState.modal.message}</p>
+                        <div class="flex gap-4">
+                            <button onclick="window.handlers.hideConfirmModal()" class="w-full bg-slate-600 hover:bg-slate-700 text-white font-bold py-3 rounded-lg">
+                                Back
+                            </button>
+                            <button id="modal-confirm-btn" class="w-full bg-red-500 hover:bg-red-600 text-white font-bold py-3 rounded-lg">
+                                Yes, Cancel
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            `;
+            // Must attach the confirm handler manually
+            document.getElementById('modal-confirm-btn').onclick = () => {
+                if (appState.modal.onConfirm) {
+                    appState.modal.onConfirm();
+                }
+                window.handlers.hideConfirm.call();
+            };
+        }
+
         // --- APP INITIALIZATION ---
         function initApp() {
             // Load all data from local storage
@@ -1116,4 +1226,5 @@
     </script>
 </body>
 </html>
+
 
