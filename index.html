@@ -1,0 +1,1059 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Alfie's Workout Tracker</title>
+    <!-- Load Tailwind CSS from CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Load Lucide Icons from CDN -->
+    <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
+
+    <style>
+        /* Base styles */
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Inter', 'Helvetica Neue', sans-serif;
+            overscroll-behavior: none; /* Prevents "pull-to-refresh" */
+        }
+        /* Custom animation for the 3-2-1 countdown */
+        @keyframes countdown-ping {
+            0% {
+                transform: scale(0.5);
+                opacity: 0.5;
+            }
+            80% {
+                transform: scale(1.2);
+                opacity: 1;
+            }
+            100% {
+                transform: scale(1.1);
+                opacity: 0;
+            }
+        }
+        .countdown-ping {
+            animation: countdown-ping 1s cubic-bezier(0, 0, 0.2, 1) forwards;
+        }
+
+        /* Ensure number inputs don't have arrows (cleaner look) */
+        input[type=number]::-webkit-inner-spin-button, 
+        input[type=number]::-webkit-outer-spin-button { 
+          -webkit-appearance: none; 
+          margin: 0; 
+        }
+        input[type=number] {
+          -moz-appearance: textfield;
+        }
+    </style>
+</head>
+<body class="flex flex-col h-full font-sans bg-slate-900 text-gray-200">
+
+    <!-- Main Content Area: This is where pages will be rendered -->
+    <main id="app-container" class="flex-grow overflow-y-auto pb-24">
+        <!-- App content will be injected here by JavaScript -->
+        <div class="p-6 text-center text-gray-400">Loading...</div>
+    </main>
+
+    <!-- Floating Timer (Container) -->
+    <div id="floating-timer-container">
+        <!-- Timer will be injected here by JavaScript -->
+    </div>
+
+    <!-- Countdown Overlay (Container) -->
+    <div id="countdown-overlay-container">
+        <!-- Countdown will be injected here -->
+    </div>
+
+    <!-- Bottom Navigation -->
+    <nav class="fixed bottom-0 left-0 right-0 bg-slate-800 border-t border-slate-700 shadow-lg z-30">
+        <div class="flex justify-around max-w-md mx-auto" id="bottom-nav-bar">
+            <!-- Nav buttons will be injected here by JavaScript -->
+        </div>
+    </nav>
+
+    <!-- Main Application Script -->
+    <script type="module">
+        // --- GLOBAL STATE ---
+        // This object will hold the application's state, similar to React's state
+        const appState = {
+            page: 'home',
+            history: [],
+            measurements: [],
+            program: [],
+            activeWorkout: null, // The workout *plan*
+            workoutLog: {}, // The *actual* performance
+            
+            // Timer state
+            timer: {
+                isOpen: false,
+                seconds: 90,
+                isRunning: false,
+                timerId: null,
+                showCountdown: null,
+            },
+        };
+
+        // --- DOM SELECTORS ---
+        const appContainer = document.getElementById('app-container');
+        const navBarContainer = document.getElementById('bottom-nav-bar');
+        const timerContainer = document.getElementById('floating-timer-container');
+        const countdownContainer = document.getElementById('countdown-overlay-container');
+
+        // --- LOCAL STORAGE UTILITIES ---
+        function getFromLocalStorage(key, initialValue) {
+            try {
+                const item = window.localStorage.getItem(key);
+                return item ? JSON.parse(item) : initialValue;
+            } catch (error) {
+                console.error('Error reading from localStorage', error);
+                return initialValue;
+            }
+        }
+
+        function saveToLocalStorage(key, value) {
+            try {
+                window.localStorage.setItem(key, JSON.stringify(value));
+            } catch (error) {
+                console.error('Error writing to localStorage', error);
+            }
+        }
+
+        // --- WORKOUT PROGRAM DATA (Initial Seed) ---
+        const PROGRAM_WEEKS = 12;
+        const getRepRange = (week) => {
+            if (week <= 4) return '12-15 reps';
+            if (week <= 8) return '8-12 reps';
+            return '6-10 reps';
+        };
+        const getTargetSets = (week) => {
+            if (week <= 4) return 3;
+            if (week <= 8) return 3;
+            return 4;
+        };
+        const createWorkoutDay = (dayName, exercises, week) => {
+            const targetSets = getTargetSets(week);
+            const repRange = getRepRange(week);
+            return {
+                day: dayName,
+                splitName: {
+                    'Day 1': 'Chest & Triceps',
+                    'Day 2': 'Back & Biceps',
+                    'Day 3': 'Legs',
+                    'Day 4': 'Shoulders & Triceps',
+                    'Day 5': 'Full Body / Focus',
+                }[dayName],
+                exercises: exercises.map(name => ({ name, targetSets, targetReps: repRange })),
+            };
+        };
+        const defaultWorkoutProgram = Array.from({ length: PROGRAM_WEEKS }, (_, i) => {
+            const week = i + 1;
+            return {
+                week,
+                repRange: getRepRange(week),
+                days: [
+                    createWorkoutDay('Day 1', ['Bench Press (Barbell or Dumbbell)', 'Incline Dumbbell Press', 'Cable Flys', 'Tricep Pushdowns', 'Overhead Tricep Extension', 'Dips (Assisted or Bodyweight)'], week),
+                    createWorkoutDay('Day 2', ['Lat Pulldowns (or Pull-ups)', 'Bent-Over Rows (Barbell or Dumbbell)', 'Seated Cable Rows', 'Dumbbell Pullovers', 'Bicep Curls (Dumbbell or Barbell)', 'Hammer Curls'], week),
+                    createWorkoutDay('Day 3', ['Squats (Barbell or Goblet)', 'Leg Press', 'Romanian Deadlifts (Dumbbell or Barbell)', 'Leg Extensions', 'Hamstring Curls', 'Calf Raises'], week),
+                    createWorkoutDay('Day 4', ['Overhead Press (Dumbbell or Barbell)', 'Dumbbell Lateral Raises', 'Front Raises (Plate or Dumbbell)', 'Reverse Pec Deck (or Face Pulls)', 'Close Grip Bench Press', 'Single Arm Tricep Pushdown'], week),
+                    createWorkoutDay('Day 5', ['Deadlifts (light, focus on form)', 'Incline Bench Press', 'Single-Arm Dumbbell Row', 'Walking Lunges', 'Bicep Curls', 'Plank'], week),
+                ],
+            };
+        });
+
+        // --- UTILITY FUNCTIONS ---
+        const calculate1RM = (weight, reps) => {
+            if (!weight || !reps || reps === 0 || weight === 0) return 0;
+            if (reps === 1) return weight;
+            return Math.round(weight * (1 + reps / 30));
+        };
+
+        const formatNumber = (num) => {
+            return new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(num);
+        };
+
+        // --- AUDIO/SPEECH UTILITIES (Browser Native) ---
+        const audioCtx = (typeof window !== 'undefined') && (window.AudioContext || window.webkitAudioContext) ? new (window.AudioContext || window.webkitAudioContext)() : null;
+        const synth = (typeof window !== 'undefined') ? window.speechSynthesis : null;
+
+        function playBeep(pitch = 880, duration = 100) {
+            if (!audioCtx) return;
+            try {
+                const oscillator = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                oscillator.connect(gain);
+                gain.connect(audioCtx.destination);
+                oscillator.type = 'sine';
+                oscillator.frequency.setValueAtTime(pitch, audioCtx.currentTime);
+                gain.gain.setValueAtTime(0.5, audioCtx.currentTime);
+                oscillator.start(audioCtx.currentTime);
+                oscillator.stop(audioCtx.currentTime + (duration / 1000));
+            } catch (error) {
+                console.error("Audio error:", error);
+            }
+        }
+
+        function speak(text) {
+            if (synth && text) {
+                try {
+                    const utterance = new SpeechSynthesisUtterance(text);
+                    utterance.rate = 0.9;
+                    synth.speak(utterance);
+                } catch (error) {
+                    console.error("Speech error:", error);
+                }
+            }
+        }
+
+        // --- DERIVED STATE FUNCTIONS ---
+        // These replace useMemo hooks
+
+        function getFunMetrics() {
+            let totalKg = 0;
+            let totalReps = 0;
+            let totalSets = 0;
+            appState.history.forEach(workout => {
+                if (!workout.log) return;
+                Object.values(workout.log).forEach(setsArray => {
+                    if (Array.isArray(setsArray)) {
+                        totalSets += setsArray.length;
+                        setsArray.forEach(set => {
+                            totalReps += set.reps || 0;
+                            totalKg += (set.weight || 0) * (set.reps || 0);
+                        });
+                    }
+                });
+            });
+            return { totalKg, totalReps, totalSets };
+        }
+
+        function getNextWorkout() {
+            if (appState.history.length === 0) {
+                return { nextWeek: 1, nextDayIndex: 0, nextWorkoutData: appState.program[0].days[0] };
+            }
+            const lastWorkout = appState.history[appState.history.length - 1];
+            const lastWeekData = appState.program.find(w => w.week === lastWorkout.week);
+            
+            if (!lastWeekData) {
+                return { nextWeek: 1, nextDayIndex: 0, nextWorkoutData: appState.program[0].days[0] };
+            }
+
+            const lastDayIndex = lastWeekData.days.findIndex(d => d.splitName === lastWorkout.splitName);
+
+            let nextWeek, nextDayIndex;
+            if (lastDayIndex === -1 || lastDayIndex === lastWeekData.days.length - 1) {
+                const nextWeekData = appState.program.find(w => w.week === lastWorkout.week + 1);
+                if (nextWeekData) {
+                    nextWeek = nextWeekData.week;
+                    nextDayIndex = 0;
+                } else {
+                    nextWeek = 1;
+                    nextDayIndex = 0;
+                }
+            } else {
+                nextWeek = lastWorkout.week;
+                nextDayIndex = lastDayIndex + 1;
+            }
+
+            const weekData = appState.program.find(w => w.week === nextWeek);
+            const nextWorkoutData = (weekData && weekData.days[nextDayIndex]) ? weekData.days[nextDayIndex] : appState.program[0].days[0];
+            
+            return { nextWeek, nextDayIndex, nextWorkoutData };
+        }
+
+        // --- EVENT HANDLERS ---
+        // We use window.handlers to make them accessible from HTML strings
+        window.handlers = {
+            setPage: (page) => {
+                appState.page = page;
+                renderApp();
+            },
+            startNextWorkout: () => {
+                const { nextWeek, nextWorkoutData } = getNextWorkout();
+                appState.activeWorkout = {
+                    week: nextWeek,
+                    ...nextWorkoutData,
+                };
+                appState.workoutLog = {};
+                appState.page = 'workout';
+                renderApp();
+            },
+            startSpecificWorkout: (weekNum, dayIndex) => {
+                const weekData = appState.program.find(w => w.week === Number(weekNum));
+                if (!weekData) return;
+                const dayData = weekData.days[dayIndex];
+                if (!dayData) return;
+                appState.activeWorkout = {
+                    week: weekData.week,
+                    ...dayData,
+                };
+                appState.workoutLog = {};
+                appState.page = 'workout';
+                renderApp();
+            },
+            finishWorkout: () => {
+                const finishedWorkout = {
+                    id: new Date().toISOString(),
+                    date: new Date().toLocaleDateString(),
+                    week: appState.activeWorkout.week,
+                    splitName: appState.activeWorkout.splitName,
+                    log: appState.workoutLog,
+                };
+                appState.history = [...appState.history, finishedWorkout];
+                saveToLocalStorage('alfieWorkoutHistory', appState.history);
+                appState.activeWorkout = null;
+                appState.workoutLog = {};
+                appState.page = 'home';
+                renderApp();
+            },
+            addSet: (exerciseName) => {
+                const newSet = { reps: 0, weight: 0 };
+                const sets = appState.workoutLog[exerciseName] || [];
+                appState.workoutLog[exerciseName] = [...sets, newSet];
+                renderWorkoutInProgressPage(); // Re-render just the workout page
+            },
+            updateSet: (exerciseName, setIndex, field, value) => {
+                const sets = [...appState.workoutLog[exerciseName]];
+                const numValue = Number(value);
+                sets[setIndex] = {
+                    ...sets[setIndex],
+                    [field]: numValue < 0 ? 0 : numValue,
+                };
+                appState.workoutLog = {
+                    ...appState.workoutLog,
+                    [exerciseName]: sets,
+                };
+                renderWorkoutInProgressPage(); // Re-render just the workout page
+            },
+            deleteHistoryItem: (e, id) => {
+                e.stopPropagation();
+                appState.history = appState.history.filter(w => w.id !== id);
+                saveToLocalStorage('alfieWorkoutHistory', appState.history);
+                renderHistoryPage(); // Re-render this page
+            },
+            deleteExercise: (weekNum, dayName, exerciseName) => {
+                const newProgram = JSON.parse(JSON.stringify(appState.program)); // Deep copy
+                const week = newProgram.find(w => w.week === weekNum);
+                if (!week) return;
+                const day = week.days.find(d => d.day === dayName);
+                if (!day) return;
+                day.exercises = day.exercises.filter(ex => ex.name !== exerciseName);
+                appState.program = newProgram;
+                saveToLocalStorage('alfieWorkoutProgram', appState.program);
+                renderWorkoutsPage(); // Re-render this page
+            },
+            saveMeasurement: () => {
+                const weight = document.getElementById('m-weight').value;
+                const arm = document.getElementById('m-arm').value;
+                const chest = document.getElementById('m-chest').value;
+                const leg = document.getElementById('m-leg').value;
+                
+                if (!weight && !arm && !chest && !leg) return;
+                
+                appState.measurements = [
+                    {
+                        id: new Date().toISOString(),
+                        date: new Date().toLocaleDateString(),
+                        weight: Number(weight) || null,
+                        arm: Number(arm) || null,
+                        chest: Number(chest) || null,
+                        leg: Number(leg) || null,
+                    },
+                    ...appState.measurements
+                ];
+                saveToLocalStorage('alfieMeasurements', appState.measurements);
+                renderProgressPage(); // Re-render this page
+            },
+            // Timer Handlers
+            openTimer: () => {
+                appState.timer.isOpen = true;
+                renderFloatingTimer();
+            },
+            minimizeTimer: () => {
+                appState.timer.isOpen = false;
+                renderFloatingTimer();
+            },
+            resetTimer: (duration) => {
+                handlers.stopTimer();
+                appState.timer.seconds = duration;
+                renderFloatingTimer();
+            },
+            stopTimer: () => {
+                if (appState.timer.timerId) clearInterval(appState.timer.timerId);
+                appState.timer.isRunning = false;
+                appState.timer.timerId = null;
+                appState.timer.showCountdown = null;
+                renderFloatingTimer();
+            },
+            startTimer: () => {
+                if (appState.timer.timerId) clearInterval(appState.timer.timerId);
+                appState.timer.isRunning = true;
+                
+                const id = setInterval(() => {
+                    const nextSecond = appState.timer.seconds - 1;
+
+                    if (nextSecond === 3) {
+                        appState.timer.showCountdown = 3;
+                        playBeep(880, 100);
+                        renderCountdownOverlay();
+                    } else if (nextSecond === 2) {
+                        appState.timer.showCountdown = 2;
+                        playBeep(880, 100);
+                        renderCountdownOverlay();
+                    } else if (nextSecond === 1) {
+                        appState.timer.showCountdown = 1;
+                        playBeep(880, 100);
+                        renderCountdownOverlay();
+                    } else if (nextSecond === 0) {
+                        clearInterval(id);
+                        appState.timer.isRunning = false;
+                        appState.timer.timerId = null;
+                        appState.timer.showCountdown = null;
+                        appState.timer.isOpen = false;
+                        appState.timer.seconds = 90; // Reset
+                        speak("Your rest is up - Get after it Alfie");
+                        playBeep(1200, 200);
+                        renderApp(); // Full re-render to hide timer
+                    } else {
+                        appState.timer.showCountdown = null;
+                        renderCountdownOverlay();
+                    }
+
+                    if (nextSecond < 0) {
+                        clearInterval(id);
+                        appState.timer.isRunning = false;
+                        appState.timer.timerId = null;
+                        appState.timer.seconds = 90;
+                        renderApp();
+                    } else {
+                        appState.timer.seconds = nextSecond;
+                        renderFloatingTimer();
+                    }
+                }, 1000);
+                appState.timer.timerId = id;
+            }
+        };
+
+        // --- RENDER FUNCTIONS ---
+
+        /**
+         * Renders the entire application based on the current page in appState.
+         */
+        function renderApp() {
+            // Render the current page
+            switch (appState.page) {
+                case 'home':
+                    renderHomePage();
+                    break;
+                case 'workouts':
+                    renderWorkoutsPage();
+                    break;
+                case 'progress':
+                    renderProgressPage();
+                    break;
+                case 'history':
+                    renderHistoryPage();
+                    break;
+                case 'workout':
+                    renderWorkoutInProgressPage();
+                    break;
+                default:
+                    renderHomePage();
+            }
+
+            // Render nav bar
+            renderBottomNav();
+            
+            // Render timer (it will be hidden if not on workout page)
+            renderFloatingTimer();
+
+            // Render countdown overlay (it will be hidden if state is null)
+            renderCountdownOverlay();
+
+            // IMPORTANT: Tell Lucide to find all <i data-lucide="..."> tags and replace them
+            lucide.createIcons();
+        }
+
+        function renderBottomNav() {
+            const navItems = [
+                { name: 'home', icon: 'home', label: 'Home' },
+                { name: 'workouts', icon: 'dumbbell', label: 'Workouts' },
+                { name: 'progress', icon: 'trending-up', label: 'Progress' },
+                { name: 'history', icon: 'history', label: 'History' },
+            ];
+            
+            navBarContainer.innerHTML = navItems.map(item => {
+                const isActive = appState.page === item.name;
+                return `
+                    <button
+                        onclick="window.handlers.setPage('${item.name}')"
+                        class="flex flex-col items-center justify-center w-full pt-3 pb-2 transition-colors ${
+                            isActive ? 'text-blue-400' : 'text-gray-500 hover:text-gray-300'
+                        }"
+                    >
+                        <i data-lucide="${item.icon}" class="${isActive ? 'font-bold' : ''}" style="stroke-width: ${isActive ? '2.5' : '2'}px;"></i>
+                        <span class="text-xs font-medium">${item.label}</span>
+                        ${isActive ? '<div class="w-8 h-1 bg-blue-400 rounded-full mt-1"></div>' : ''}
+                    </button>
+                `;
+            }).join('');
+        }
+        
+        // --- Page Render Functions ---
+
+        function renderHomePage() {
+            const { nextWeek, nextWorkoutData } = getNextWorkout();
+            const { totalKg, totalReps, totalSets } = getFunMetrics();
+            const totalWorkouts = appState.history.length;
+
+            const exercisesPreview = nextWorkoutData.exercises.slice(0, 3).map(ex => `
+                <p key="${ex.name}" class="text-gray-400">
+                    - ${ex.name} (${ex.targetReps})
+                </p>
+            `).join('');
+
+            const exercisesMore = nextWorkoutData.exercises.length > 3 ?
+                `<p class="text-gray-500">+ ${nextWorkoutData.exercises.length - 3} more...</p>` : '';
+            
+            // This is messy, but it's how we build UI without React
+            // We use data-* attributes to store state for event listeners
+            appContainer.innerHTML = `
+                <div class="p-6 space-y-6">
+                    <header class="space-y-2">
+                        <h1 class="text-3xl font-bold text-white">Hi Alfie!</h1>
+                        <p class="text-lg text-gray-400">Ready to crush your next session?</p>
+                    </header>
+
+                    <!-- Next Workout Card -->
+                    <div class="bg-slate-800 p-5 rounded-2xl shadow-lg space-y-4">
+                        <div class="flex justify-between items-center">
+                            <div>
+                                <p class="text-sm font-semibold text-blue-400">NEXT WORKOUT</p>
+                                <h2 class="text-2xl font-bold text-white">Week ${nextWeek}, ${nextWorkoutData.splitName}</h2>
+                            </div>
+                            <button
+                                onclick="window.handlers.startNextWorkout()"
+                                class="bg-blue-500 hover:bg-blue-600 text-white rounded-full p-4 transition-transform active:scale-95"
+                            >
+                                <i data-lucide="play" class="fill-white"></i>
+                            </button>
+                        </div>
+                        <div class="space-y-2">
+                            ${exercisesPreview}
+                            ${exercisesMore}
+                        </div>
+                    </div>
+
+                    <!-- Workout Picker -->
+                    <div class="bg-slate-800 p-5 rounded-2xl shadow-lg space-y-4">
+                        <button id="picker-toggle" class="w-full flex justify-between items-center">
+                            <h2 class="text-xl font-bold text-white">Or, select a workout</h2>
+                            <i data-lucide="chevron-right" id="picker-icon"></i>
+                        </button>
+                        <div id="picker-content" class="hidden space-y-4 pt-2">
+                            <div>
+                                <label for="week-select" class="block text-sm font-medium text-gray-400 mb-1">Select Week</label>
+                                <select id="week-select" class="w-full bg-slate-700 text-white p-2 rounded-lg">
+                                    ${appState.program.map(w => `<option value="${w.week}" ${w.week === nextWeek ? 'selected' : ''}>Week ${w.week}</option>`).join('')}
+                                </select>
+                            </div>
+                            <div id="day-picker-list" class="space-y-2">
+                                <!-- Day buttons will be injected here -->
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Stats Cards -->
+                    <div class="grid grid-cols-2 gap-4">
+                        <div class="bg-slate-800 p-4 rounded-2xl shadow-lg text-center">
+                            <p class="text-sm text-gray-400">Total Sessions</p>
+                            <p class="text-3xl font-bold text-white">${formatNumber(totalWorkouts)}</p>
+                        </div>
+                        <div class="bg-slate-800 p-4 rounded-2xl shadow-lg text-center">
+                            <p class="text-sm text-gray-400">Total Volume (kg)</p>
+                            <p class="text-3xl font-bold text-white">${formatNumber(totalKg)}</p>
+                        </div>
+                        <div class="bg-slate-800 p-4 rounded-2xl shadow-lg text-center">
+                            <p class="text-sm text-gray-400">Total Reps</p>
+                            <p class="text-3xl font-bold text-white">${formatNumber(totalReps)}</p>
+                        </div>
+                        <div class="bg-slate-800 p-4 rounded-2xl shadow-lg text-center">
+                            <p class="text-sm text-gray-400">Total Sets</p>
+                            <p class="text-3xl font-bold text-white">${formatNumber(totalSets)}</p>
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            // --- Event Listeners for this page ---
+            const pickerToggle = document.getElementById('picker-toggle');
+            const pickerContent = document.getElementById('picker-content');
+            const pickerIcon = document.getElementById('picker-icon');
+            let showPicker = false;
+            
+            pickerToggle.onclick = () => {
+                showPicker = !showPicker;
+                pickerContent.classList.toggle('hidden');
+                pickerIcon.outerHTML = showPicker ? '<i data-lucide="chevron-down"></i>' : '<i data-lucide="chevron-right"></i>';
+                lucide.createIcons(); // Re-render icons
+            };
+            
+            const weekSelect = document.getElementById('week-select');
+            const dayPickerList = document.getElementById('day-picker-list');
+            
+            const renderDayList = (weekNum) => {
+                const week = appState.program.find(w => w.week === Number(weekNum));
+                if (week) {
+                    dayPickerList.innerHTML = week.days.map((day, index) => `
+                        <button
+                            onclick="window.handlers.startSpecificWorkout(${week.week}, ${index})"
+                            class="w-full text-left bg-slate-700 hover:bg-slate-600 p-3 rounded-lg flex justify-between items-center transition-colors"
+                        >
+                            <span class="font-semibold">${day.day}: ${day.splitName}</span>
+                            <i data-lucide="play" class="w-4 h-4"></i>
+                        </button>
+                    `).join('');
+                    lucide.createIcons(); // Re-render icons
+                }
+            };
+            
+            weekSelect.onchange = (e) => {
+                renderDayList(e.target.value);
+            };
+            
+            // Initial render of day list
+            renderDayList(weekSelect.value);
+        }
+
+        function renderWorkoutsPage() {
+            appContainer.innerHTML = `
+                <div class="p-6 space-y-4" id="workouts-list">
+                    <h1 class="text-3xl font-bold text-white mb-4">12 Week Program</h1>
+                    ${appState.program.map(weekData => `
+                        <div class="bg-slate-800 rounded-2xl shadow-lg">
+                            <button
+                                data-week-id="${weekData.week}"
+                                class="w-full flex justify-between items-center p-5 week-toggle"
+                            >
+                                <span class="text-xl font-bold text-white">Week ${weekData.week}</span>
+                                <div class="flex items-center gap-2">
+                                    <span class="text-sm text-blue-400">${weekData.repRange}</span>
+                                    <i data-lucide="chevron-right" class="chevron-icon"></i>
+                                </div>
+                            </button>
+                            
+                            <div class="px-5 pb-5 space-y-3 hidden week-content" id="week-content-${weekData.week}">
+                                ${weekData.days.map(day => `
+                                    <div class="bg-slate-700 p-4 rounded-lg">
+                                        <p class="text-lg font-semibold text-white">${day.day}: ${day.splitName}</p>
+                                        <ul class="pl-2 text-gray-300 space-y-2 mt-2">
+                                            ${day.exercises.map(ex => `
+                                                <li class="text-sm flex justify-between items-center">
+                                                    <span>- ${ex.name}</span>
+                                                    <button 
+                                                        onclick="window.handlers.deleteExercise(${weekData.week}, '${day.day}', '${ex.name}')"
+                                                        class="text-red-500 hover:text-red-400 p-1"
+                                                    >
+                                                        <i data-lucide="trash-2" class="w-4 h-4"></i>
+                                                    </button>
+                                                </li>
+                                            `).join('')}
+                                        </ul>
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+            
+            // Event Listeners for this page
+            document.querySelectorAll('.week-toggle').forEach(button => {
+                button.onclick = () => {
+                    const weekId = button.dataset.weekId;
+                    const content = document.getElementById(`week-content-${weekId}`);
+                    const icon = button.querySelector('.chevron-icon');
+                    const isOpen = !content.classList.contains('hidden');
+                    
+                    content.classList.toggle('hidden');
+                    icon.outerHTML = isOpen ? '<i data-lucide="chevron-right" class="chevron-icon"></i>' : '<i data-lucide="chevron-down" class="chevron-icon"></i>';
+                    lucide.createIcons();
+                };
+            });
+        }
+        
+        function renderHistoryPage() {
+            appContainer.innerHTML = `
+                <div class="p-6 space-y-4">
+                    <h1 class="text-3xl font-bold text-white mb-4">Workout History</h1>
+                    ${appState.history.length === 0 ? `
+                        <p class="text-gray-400 text-center">No workouts completed yet.</p>
+                    ` : `
+                        <div class="space-y-3">
+                            ${[...appState.history].reverse().map(workout => `
+                                <div class="bg-slate-800 rounded-2xl shadow-lg">
+                                    <button
+                                        class="w-full flex justify-between items-center p-5 text-left history-toggle"
+                                        data-history-id="${workout.id}"
+                                    >
+                                        <div>
+                                            <p class="text-lg font-bold text-white">Week ${workout.week}, ${workout.splitName}</p>
+                                            <p class="text-sm text-gray-400">${workout.date}</p>
+                                        </div>
+                                        <div class="flex items-center gap-4">
+                                            <button 
+                                                onclick="window.handlers.deleteHistoryItem(event, '${workout.id}')"
+                                                class="text-red-400 hover:text-red-500 p-1"
+                                            >
+                                                <i data-lucide="x" class="w-5 h-5"></i>
+                                            </button>
+                                            <i data-lucide="chevron-right" class="chevron-icon"></i>
+                                        </div>
+                                    </button>
+
+                                    <div class="px-5 pb-5 space-y-3 hidden history-content" id="history-content-${workout.id}">
+                                        ${Object.entries(workout.log).map(([exercise, sets]) => `
+                                            <div class="bg-slate-700 p-3 rounded-lg">
+                                                <p class="font-semibold text-white">${exercise}</p>
+                                                <ul class="text-gray-300">
+                                                    ${sets.map((set, i) => `
+                                                        <li class="text-sm">
+                                                            Set ${i + 1}: ${set.weight} kg x ${set.reps} reps 
+                                                            (1RM: ${calculate1RM(set.weight, set.reps)} kg)
+                                                        </li>
+                                                    `).join('')}
+                                                </ul>
+                                            </div>
+                                        `).join('')}
+                                    </div>
+                                </div>
+                            `).join('')}
+                        </div>
+                    `}
+                </div>
+            `;
+            
+            // Event Listeners for this page
+            document.querySelectorAll('.history-toggle').forEach(button => {
+                button.onclick = () => {
+                    const historyId = button.dataset.historyId;
+                    const content = document.getElementById(`history-content-${historyId}`);
+                    const icon = button.querySelector('.chevron-icon');
+                    const isOpen = !content.classList.contains('hidden');
+                    
+                    content.classList.toggle('hidden');
+                    icon.outerHTML = isOpen ? '<i data-lucide="chevron-right" class="chevron-icon"></i>' : '<i data-lucide="chevron-down" class="chevron-icon"></i>';
+                    lucide.createIcons();
+                };
+            });
+        }
+        
+        function renderProgressPage() {
+            // Process history data for graphs
+            const exerciseMap = new Map();
+            [...appState.history].forEach(workout => {
+                Object.entries(workout.log).forEach(([exerciseName, sets]) => {
+                    if (!exerciseMap.has(exerciseName)) {
+                        exerciseMap.set(exerciseName, []);
+                    }
+                    const best1RM = sets.reduce((max, set) => {
+                        const current1RM = calculate1RM(set.weight, set.reps);
+                        return current1RM > max ? current1RM : max;
+                    }, 0);
+                    if (best1RM > 0) {
+                        exerciseMap.get(exerciseName).push({ date: workout.date, value: best1RM });
+                    }
+                });
+            });
+            
+            appContainer.innerHTML = `
+                <div class="p-6 space-y-6">
+                    <h1 class="text-3xl font-bold text-white mb-4">Progress</h1>
+                    
+                    <!-- Measurements Section -->
+                    <div class="bg-slate-800 p-5 rounded-2xl shadow-lg space-y-4">
+                        <h2 class="text-2xl font-bold text-white">Log Measurements</h2>
+                        <div class="grid grid-cols-2 gap-3">
+                            <input type="number" placeholder="Weight (kg)" id="m-weight" class="w-full bg-slate-700 text-white p-2 rounded-lg" />
+                            <input type="number" placeholder="Arm (cm)" id="m-arm" class="w-full bg-slate-700 text-white p-2 rounded-lg" />
+                            <input type="number" placeholder="Chest (cm)" id="m-chest" class="w-full bg-slate-700 text-white p-2 rounded-lg" />
+                            <input type="number" placeholder="Leg (cm)" id="m-leg" class="w-full bg-slate-700 text-white p-2 rounded-lg" />
+                        </div>
+                        <button onclick="window.handlers.saveMeasurement()" class="w-full bg-blue-500 hover:bg-blue-600 text-white font-bold py-3 rounded-lg">
+                            Save Measurement
+                        </button>
+                        
+                        <div class="space-y-2 pt-4">
+                            <h3 class="text-lg font-semibold text-white">Recent Logs</h3>
+                            ${appState.measurements.length === 0 ? `
+                                <p class="text-gray-400 text-sm">No measurements logged yet.</p>
+                            ` : `
+                                ${appState.measurements.slice(0, 5).map(m => `
+                                    <div class="bg-slate-700 p-3 rounded-lg text-sm">
+                                        <p class="font-bold text-white">${m.date}</p>
+                                        <p class="text-gray-300">
+                                           ${m.weight ? `Weight: ${m.weight}kg ` : ''}
+                                           ${m.arm ? `Arm: ${m.arm}cm ` : ''}
+                                           ${m.chest ? `Chest: ${m.chest}cm ` : ''}
+                                           ${m.leg ? `Leg: ${m.leg}cm ` : ''}
+                                        </p>
+                                    </div>
+                                `).join('')}
+                            `}
+                        </div>
+                    </div>
+                    
+                    <!-- Lift Progress Section -->
+                    <div class="bg-slate-800 p-5 rounded-2xl shadow-lg space-y-4">
+                        <h2 class="text-2xl font-bold text-white">Lift Progress (1RM)</h2>
+                        ${exerciseMap.size === 0 ? `
+                            <p class="text-gray-400 text-sm">Complete workouts to see progress.</p>
+                        ` : `
+                            ${Array.from(exerciseMap.entries()).map(([exerciseName, data]) => `
+                                <div class="bg-slate-700 p-3 rounded-lg">
+                                    <p class="font-bold text-white">${exerciseName}</p>
+                                    ${createSparklineGraph(data)}
+                                    <div class="flex justify-between text-xs text-gray-400">
+                                        <span>${data[0].date}</span>
+                                        <span>${data[data.length - 1].date}</span>
+                                    </div>
+                                </div>
+                            `).join('')}
+                        `}
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderWorkoutInProgressPage() {
+            const { activeWorkout: workout, workoutLog: log } = appState; // <-- FIX 1 IS HERE
+            appContainer.innerHTML = `
+                <div class="p-6 space-y-6">
+                    <header class="space-y-1">
+                        <p class="text-blue-400 font-semibold">Week ${workout.week}</p>
+                        <h1 class="text-3xl font-bold text-white">${workout.splitName}</h1>
+                    </header>
+                    
+                    <div class="space-y-4">
+                        ${workout.exercises.map(ex => renderExerciseTracker(ex, log[ex.name] || [])).join('')}
+                    </div>
+                    
+                    <div class="flex gap-4">
+                        <button
+                            onclick="window.handlers.finishWorkout()"
+                            class="w-full flex items-center justify-center gap-2 bg-blue-500 hover:bg-blue-600 text-white font-bold py-3 px-4 rounded-xl transition-transform active:scale-95"
+                        >
+                            <i data-lucide="check" class="w-5 h-5"></i>
+                            Finish
+                        </button>
+                    </div>
+                </div>
+            `;
+            
+            // Add event listeners for the input fields
+            appContainer.querySelectorAll('input[data-set-update]').forEach(input => {
+                input.onchange = (e) => {
+                    const { ex, index, field } = e.target.dataset;
+                    window.handlers.updateSet(ex, Number(index), field, e.target.value); // <-- FIX 2 IS HERE
+                };
+            });
+
+            // Re-render icons
+            lucide.createIcons();
+        }
+
+        // --- Sub-Component Render Functions ---
+        
+        function renderExerciseTracker(exercise, sets) {
+            const targetSets = exercise.targetSets;
+            const completedSets = sets.length;
+            const session1RM = sets.reduce((max, set) => {
+                const current1RM = calculate1RM(set.weight, set.reps);
+                return current1RM > max ? current1RM : max;
+            }, 0);
+
+            return `
+                <div class="bg-slate-800 p-5 rounded-2xl shadow-lg space-y-4">
+                    <div class="flex justify-between items-start">
+                        <div>
+                            <h3 class="text-xl font-bold text-white">${exercise.name}</h3>
+                            <p class="text-sm text-gray-400">Target: ${exercise.targetSets} sets of ${exercise.targetReps}</p>
+                        </div>
+                        ${session1RM > 0 ? `
+                            <div class="bg-blue-900 text-blue-300 p-2 rounded-lg text-center">
+                                <p class="text-xs font-bold">SESSION 1RM</p>
+                                <p class="text-lg font-bold">${session1RM} kg</p>
+                            </div>
+                        ` : ''}
+                    </div>
+                    
+                    <div class="space-y-3">
+                        ${sets.map((set, index) => `
+                            <div class="flex items-center gap-3">
+                                <span class="bg-slate-900 text-white font-bold w-8 h-8 rounded-full flex items-center justify-center">
+                                    ${index + 1}
+                                </span>
+                                <div class="flex-1">
+                                    <input
+                                        type="number"
+                                        placeholder="kg"
+                                        value="${set.weight === 0 ? '' : set.weight}"
+                                        class="w-full bg-slate-700 text-white p-2 rounded-lg text-center"
+                                        data-set-update="true"
+                                        data-ex="${exercise.name}"
+                                        data-index="${index}"
+                                        data-field="weight"
+                                    />
+                                </div>
+                                <span class="text-gray-400">x</span>
+                                <div class="flex-1">
+                                    <input
+                                        type="number"
+                                        placeholder="reps"
+                                        value="${set.reps === 0 ? '' : set.reps}"
+                                        class="w-full bg-slate-700 text-white p-2 rounded-lg text-center"
+                                        data-set-update="true"
+                                        data-ex="${exercise.name}"
+                                        data-index="${index}"
+                                        data-field="reps"
+                                    />
+                                </div>
+                            </div>
+                        `).join('')}
+                    </div>
+                    
+                    ${completedSets < targetSets * 2 ? `
+                        <button
+                            onclick="window.handlers.addSet('${exercise.name}')"
+                            class="w-full bg-slate-700 hover:bg-slate-600 text-blue-400 font-semibold py-3 rounded-lg transition-transform active:scale-95 flex items-center justify-center gap-2"
+                        >
+                            <i data-lucide="plus" class="w-5 h-5"></i> Add Set (${completedSets + 1})
+                        </button>
+                    ` : ''}
+                </div>
+            `;
+        }
+
+        function createSparklineGraph(data) {
+            if (data.length < 2) {
+                return `<div class="h-16 flex items-center justify-center text-sm text-gray-500">Not enough data to graph yet.</div>`;
+            }
+            
+            const values = data.map(d => d.value);
+            const min = Math.min(...values);
+            const max = Math.max(...values);
+            const range = max - min;
+            
+            const normalized = values.map(v => range === 0 ? 50 : 100 - ((v - min) / range) * 90 + 5);
+            
+            const path = normalized.map((val, i) => {
+                const x = (i / (normalized.length - 1)) * 100;
+                const y = val;
+                return `${i === 0 ? 'M' : 'L'} ${x} ${y}`;
+            }).join(' ');
+
+            return `
+                <svg viewBox="0 0 100 100" class="w-full h-16" preserveAspectRatio="none">
+                    <path d="${path}" fill="none" stroke="#3b82f6" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+            `;
+        }
+        
+        function renderFloatingTimer() {
+            if (appState.page !== 'workout') {
+                timerContainer.innerHTML = '';
+                return;
+            }
+            
+            const { isOpen, seconds, isRunning } = appState.timer;
+
+            if (!isOpen) {
+                timerContainer.innerHTML = `
+                    <button
+                        onclick="window.handlers.openTimer()"
+                        class="fixed bottom-24 right-6 bg-blue-500 hover:bg-blue-600 text-white rounded-full p-4 shadow-lg z-40 transition-transform active:scale-95"
+                        aria-label="Open Rest Timer"
+                    >
+                        <i data-lucide="timer" class="w-7 h-7"></i>
+                    </button>
+                `;
+                lucide.createIcons();
+                return;
+            }
+
+            const formatTime = () => {
+                const mins = Math.floor(seconds / 60);
+                const secs = seconds % 60;
+                return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
+            };
+            
+            timerContainer.innerHTML = `
+                <div class="fixed bottom-24 right-6 bg-slate-800 p-6 rounded-2xl shadow-2xl w-80 text-center space-y-4 z-40">
+                    <div class="flex justify-between items-center">
+                        <h2 class="text-xl font-bold text-white">Rest Timer</h2>
+                        <button onclick="window.handlers.minimizeTimer()" class="text-gray-500 hover:text-white" aria-label="Minimize Timer">
+                            <i data-lucide="chevron-down" class="w-6 h-6"></i>
+                        </button>
+                    </div>
+                    
+                    <div class="text-7xl font-bold text-blue-400 my-4">
+                        ${formatTime()}
+                    </div>
+                    
+                    <div class="grid grid-cols-3 gap-2">
+                        <button onclick="window.handlers.resetTimer(60)" class="bg-slate-700 text-white p-2 rounded-lg">60s</button>
+                        <button onclick="window.handlers.resetTimer(90)" class="bg-slate-700 text-white p-2 rounded-lg">90s</button>
+                        <button onclick="window.handlers.resetTimer(120)" class="bg-slate-700 text-white p-2 rounded-lg">120s</button>
+                    </div>
+                    
+                    ${isRunning ? `
+                        <button
+                            onclick="window.handlers.stopTimer()"
+                            class="w-full bg-red-500 hover:bg-red-600 text-white font-bold py-3 rounded-lg"
+                        >
+                            Stop
+                        </button>
+                    ` : `
+                        <button
+                            onclick="window.handlers.startTimer()"
+                            class="w-full bg-blue-500 hover:bg-blue-600 text-white font-bold py-3 rounded-lg"
+                        >
+                            Start
+                        </button>
+                    `}
+                </div>
+            `;
+            lucide.createIcons();
+        }
+
+        function renderCountdownOverlay() {
+            const { showCountdown } = appState.timer;
+            if (showCountdown) {
+                countdownContainer.innerHTML = `
+                    <div class="fixed inset-0 bg-black bg-opacity-90 flex items-center justify-center z-50 pointer-events-none">
+                        <h1 class="text-[20rem] font-bold text-white countdown-ping">
+                            ${showCountdown}
+                        </h1>
+                    </div>
+                `;
+            } else {
+                countdownContainer.innerHTML = '';
+            }
+        }
+
+        // --- APP INITIALIZATION ---
+        function initApp() {
+            // Load all data from local storage
+            appState.history = getFromLocalStorage('alfieWorkoutHistory', []);
+            appState.measurements = getFromLocalStorage('alfieMeasurements', []);
+            appState.program = getFromLocalStorage('alfieWorkoutProgram', defaultWorkoutProgram);
+            
+            // Initial render
+            renderApp();
+        }
+
+        // Start the app once the DOM is loaded
+        document.addEventListener('DOMContentLoaded', initApp);
+
+    </script>
+</body>
+</html>
+
