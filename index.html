@@ -308,10 +308,16 @@
                 const newSet = { reps: 0, weight: 0 };
                 const sets = appState.workoutLog[exerciseName] || [];
                 appState.workoutLog[exerciseName] = [...sets, newSet];
-                renderWorkoutInProgressPage(); // Re-render just the workout page
+                renderWorkoutInProgressPage(); // Re-render. This is robust.
             },
             updateSet: (exerciseName, setIndex, field, value) => {
-                const sets = [...appState.workoutLog[exerciseName]];
+                // This is now called on 'oninput'
+                const sets = appState.workoutLog[exerciseName] ? [...appState.workoutLog[exerciseName]] : [];
+                // Ensure the set exists if we're updating it
+                while (sets.length <= setIndex) {
+                    sets.push({ reps: 0, weight: 0 });
+                }
+
                 const numValue = Number(value);
                 sets[setIndex] = {
                     ...sets[setIndex],
@@ -321,7 +327,49 @@
                     ...appState.workoutLog,
                     [exerciseName]: sets,
                 };
-                renderWorkoutInProgressPage(); // Re-render just the workout page
+                
+                // --- Start Manual DOM Update ---
+                // We only update the 1RM and BG color, not the whole page.
+                
+                // Find the card
+                const cardId = `exercise-card-${exerciseName.replace(/[^a-z0-9]/gi, '-')}`;
+                const card = document.getElementById(cardId);
+                if (!card) return; // Should not happen
+
+                // 1. Update 1RM
+                const session1RM = sets.reduce((max, set) => {
+                    const current1RM = calculate1RM(set.weight, set.reps);
+                    return current1RM > max ? current1RM : max;
+                }, 0);
+                
+                const rmBox = card.querySelector('.session-1rm-value');
+                if (rmBox) {
+                    if (session1RM > 0) {
+                        rmBox.textContent = `${session1RM} kg`;
+                        rmBox.parentElement.classList.remove('opacity-0');
+                    } else {
+                        rmBox.innerHTML = '&nbsp;'; // Keep height
+                        rmBox.parentElement.classList.add('opacity-0');
+                    }
+                }
+
+                // 2. Update background color
+                const exerciseDef = appState.activeWorkout.exercises.find(e => e.name === exerciseName);
+                if (exerciseDef) {
+                    const targetSets = exerciseDef.targetSets;
+                    // Filter out empty sets for completion check
+                    const completedSets = sets.filter(s => s.weight > 0 || s.reps > 0).length;
+                    const isComplete = completedSets >= targetSets && targetSets > 0;
+                    
+                    if (isComplete) {
+                        card.classList.remove('bg-slate-800');
+                        card.classList.add('bg-emerald-900');
+                    } else {
+                        card.classList.remove('bg-emerald-900');
+                        card.classList.add('bg-slate-800');
+                    }
+                }
+                // --- End Manual DOM Update ---
             },
             deleteHistoryItem: (e, id) => {
                 e.stopPropagation();
@@ -824,7 +872,7 @@
         }
 
         function renderWorkoutInProgressPage() {
-            const { activeWorkout: workout, workoutLog: log } = appState; // <-- FIX 1 IS HERE
+            const { activeWorkout: workout, workoutLog: log } = appState; 
             appContainer.innerHTML = `
                 <div class="p-6 space-y-6">
                     <header class="space-y-1">
@@ -850,9 +898,9 @@
             
             // Add event listeners for the input fields
             appContainer.querySelectorAll('input[data-set-update]').forEach(input => {
-                input.onchange = (e) => {
+                input.oninput = (e) => { // Changed to oninput
                     const { ex, index, field } = e.target.dataset;
-                    window.handlers.updateSet(ex, Number(index), field, e.target.value); // <-- FIX 2 IS HERE
+                    window.handlers.updateSet(ex, Number(index), field, e.target.value); 
                 };
             });
 
@@ -864,14 +912,19 @@
         
         function renderExerciseTracker(exercise, sets) {
             const targetSets = exercise.targetSets;
-            const completedSets = sets.length;
+            const completedSets = sets.filter(s => s.weight > 0 || s.reps > 0).length;
             const session1RM = sets.reduce((max, set) => {
                 const current1RM = calculate1RM(set.weight, set.reps);
                 return current1RM > max ? current1RM : max;
             }, 0);
 
+            const isComplete = completedSets >= targetSets && targetSets > 0;
+            const cardBgClass = isComplete ? 'bg-emerald-900' : 'bg-slate-800';
+            // Create a safe ID for the card
+            const cardId = `exercise-card-${exercise.name.replace(/[^a-z0-9]/gi, '-')}`;
+
             return `
-                <div class="bg-slate-800 p-5 rounded-2xl shadow-lg space-y-4">
+                <div id="${cardId}" class="${cardBgClass} p-5 rounded-2xl shadow-lg space-y-4 transition-colors duration-300">
                     <div class="flex justify-between items-start">
                         <div>
                             <h3 class="text-xl font-bold text-white">${exercise.name}</h3>
@@ -880,9 +933,14 @@
                         ${session1RM > 0 ? `
                             <div class="bg-blue-900 text-blue-300 p-2 rounded-lg text-center">
                                 <p class="text-xs font-bold">SESSION 1RM</p>
-                                <p class="text-lg font-bold">${session1RM} kg</p>
+                                <p class="text-lg font-bold session-1rm-value">${session1RM} kg</p>
                             </div>
-                        ` : ''}
+                        ` : `
+                            <div class="bg-blue-900 text-blue-300 p-2 rounded-lg text-center opacity-0">
+                                <p class="text-xs font-bold">SESSION 1RM</p>
+                                <p class="text-lg font-bold session-1rm-value">&nbsp;</p>
+                            </div>
+                        `}
                     </div>
                     
                     <div class="space-y-3">
@@ -901,6 +959,7 @@
                                         data-ex="${exercise.name}"
                                         data-index="${index}"
                                         data-field="weight"
+                                        autocomplete="off"
                                     />
                                 </div>
                                 <span class="text-gray-400">x</span>
@@ -914,6 +973,7 @@
                                         data-ex="${exercise.name}"
                                         data-index="${index}"
                                         data-field="reps"
+                                        autocomplete="off"
                                     />
                                 </div>
                             </div>
@@ -925,7 +985,7 @@
                             onclick="window.handlers.addSet('${exercise.name}')"
                             class="w-full bg-slate-700 hover:bg-slate-600 text-blue-400 font-semibold py-3 rounded-lg transition-transform active:scale-95 flex items-center justify-center gap-2"
                         >
-                            <i data-lucide="plus" class="w-5 h-5"></i> Add Set (${completedSets + 1})
+                            <i data-lucide="plus" class="w-5 h-5"></i> Add Set (${sets.length + 1})
                         </button>
                     ` : ''}
                 </div>
